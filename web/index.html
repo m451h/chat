@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EHR Chatbot Demo Frontend</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', 'Noto Sans', Arial, 'Apple Color Emoji', 'Segoe UI Emoji';
+      height: 100vh;
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      grid-template-rows: auto 1fr auto;
+      grid-template-areas:
+        "sidebar header"
+        "sidebar main"
+        "sidebar footer";
+    }
+    header {
+      grid-area: header;
+      border-bottom: 1px solid #eee;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    #sidebar {
+      grid-area: sidebar;
+      border-right: 1px solid #eee;
+      padding: 12px;
+      overflow-y: auto;
+    }
+    main {
+      grid-area: main;
+      display: grid;
+      grid-template-rows: 1fr auto;
+      height: 100%;
+    }
+    #chat {
+      padding: 16px;
+      overflow-y: auto;
+    }
+    #composer {
+      border-top: 1px solid #eee;
+      display: flex;
+      gap: 8px;
+      padding: 12px;
+    }
+    .session-item {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 8px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      background: #fafafa;
+    }
+    .session-item.active {
+      border-color: #4f46e5;
+      background: #eef2ff;
+    }
+    .msg {
+      padding: 10px 12px;
+      border-radius: 10px;
+      margin: 8px 0;
+      max-width: 80%;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .msg.user {
+      background: #e0f2fe;
+      align-self: flex-end;
+      margin-left: auto;
+    }
+    .msg.assistant {
+      background: #f1f5f9;
+      align-self: flex-start;
+      margin-right: auto;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    input, textarea, button, select {
+      font: inherit;
+    }
+    input[type="text"], textarea {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+    }
+    button {
+      padding: 8px 12px;
+      border: 1px solid #4f46e5;
+      background: #4f46e5;
+      color: #fff;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: #fff;
+      color: #4f46e5;
+    }
+    footer {
+      grid-area: footer;
+      border-top: 1px solid #eee;
+      padding: 8px 16px;
+      color: #666;
+      font-size: 12px;
+    }
+    .muted {
+      color: #666;
+      font-size: 12px;
+    }
+    .small {
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <aside id="sidebar">
+    <h3>Sessions</h3>
+    <div class="row">
+      <input id="userId" type="text" value="1234567890123" />
+    </div>
+    <div id="sessions"></div>
+    <hr />
+    <h4>Start New Session</h4>
+    <div class="row">
+      <input id="conditionName" type="text" placeholder="Condition name" value="دیابت نوع دو" />
+    </div>
+    <div class="row">
+      <textarea id="patientJson" rows="8" placeholder="Patient JSON">{ 
+  "glucose": [120, 140, 135],
+  "hba1c": 7.2,
+  "medications": ["Metformin 500mg BID"],
+  "diet": { "carbs_per_meal_g": 45 }
+}</textarea>
+    </div>
+    <div class="row">
+      <button id="startBtn">Start Session</button>
+    </div>
+    <p class="muted">Use your own patient JSON. It will be stored for the session context.</p>
+  </aside>
+  <header>
+    <strong>EHR Chatbot Demo</strong>
+    <span class="muted">API base: <code id="apiBaseLabel">http://127.0.0.1:8000</code></span>
+  </header>
+  <main>
+    <section id="chat"></section>
+    <section id="composer">
+      <input id="messageInput" type="text" placeholder="Type your message…" />
+      <button id="sendBtn">Send</button>
+    </section>
+  </main>
+  <footer>
+    Simple demo client. Open the API docs at <a href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer">Swagger UI</a>.
+  </footer>
+
+  <script>
+    const API_BASE = (localStorage.getItem('apiBase') || 'http://127.0.0.1:8000').replace(/\/+$/, '');
+    document.getElementById('apiBaseLabel').textContent = API_BASE;
+
+    let currentSessionId = null;
+
+    const $sessions = document.getElementById('sessions');
+    const $chat = document.getElementById('chat');
+    const $userId = document.getElementById('userId');
+    const $conditionName = document.getElementById('conditionName');
+    const $patientJson = document.getElementById('patientJson');
+    const $messageInput = document.getElementById('messageInput');
+    const $startBtn = document.getElementById('startBtn');
+    const $sendBtn = document.getElementById('sendBtn');
+
+    function el(tag, className, text) {
+      const e = document.createElement(tag);
+      if (className) e.className = className;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    }
+
+    function renderMessage(role, content) {
+      const msg = el('div', `msg ${role}`);
+      msg.textContent = content;
+      $chat.appendChild(msg);
+      $chat.scrollTop = $chat.scrollHeight;
+    }
+
+    function clearChat() {
+      $chat.innerHTML = '';
+    }
+
+    function renderSessions(sessions) {
+      $sessions.innerHTML = '';
+      sessions.forEach(s => {
+        const item = el('div', 'session-item' + (s.id === currentSessionId ? ' active' : ''));
+        item.innerHTML = `
+          <div><strong>#${s.id}</strong> ${s.title ? s.title : ''}</div>
+          <div class="small muted">${s.updated_at ? new Date(s.updated_at).toLocaleString() : ''}</div>
+        `;
+        item.addEventListener('click', async () => {
+          currentSessionId = s.id;
+          await loadMessages(currentSessionId);
+          await refreshSessions();
+        });
+        $sessions.appendChild(item);
+      });
+    }
+
+    async function refreshSessions() {
+      const uid = $userId.value.trim();
+      if (!uid) return;
+      const res = await fetch(`${API_BASE}/sessions?user_id=${encodeURIComponent(uid)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      renderSessions(data);
+    }
+
+    async function loadMessages(sessionId) {
+      const res = await fetch(`${API_BASE}/sessions/${sessionId}/messages`);
+      if (!res.ok) {
+        alert('Failed to load messages');
+        return;
+      }
+      const messages = await res.json();
+      clearChat();
+      messages.forEach(m => renderMessage(m.role, m.content));
+    }
+
+    async function startSession() {
+      const uid = $userId.value.trim();
+      const cname = $conditionName.value.trim() || 'Condition';
+      if (!uid) {
+        alert('Please enter user id');
+        return;
+      }
+      let patient;
+      try {
+        patient = JSON.parse($patientJson.value || '{}');
+      } catch (e) {
+        alert('Patient JSON is invalid');
+        return;
+      }
+      const payload = {
+        user_id: Number(uid),
+        condition_name: cname,
+        patient_data: patient
+      };
+      const res = await fetch(`${API_BASE}/sessions/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert('Failed to start session: ' + (err.detail || res.statusText));
+        return;
+      }
+      const data = await res.json();
+      currentSessionId = data.session_id;
+      clearChat();
+      if (data.initial_message && data.initial_message.content) {
+        renderMessage('assistant', data.initial_message.content);
+      }
+      await refreshSessions();
+    }
+
+    async function sendMessage() {
+      if (!currentSessionId) {
+        alert('Start or select a session first');
+        return;
+      }
+      const text = $messageInput.value.trim();
+      if (!text) return;
+      renderMessage('user', text);
+      $messageInput.value = '';
+      const res = await fetch(`${API_BASE}/sessions/${currentSessionId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert('Failed to send: ' + (err.detail || res.statusText));
+        return;
+      }
+      const data = await res.json();
+      renderMessage('assistant', data.reply.content);
+      await refreshSessions();
+    }
+
+    $startBtn.addEventListener('click', startSession);
+    $sendBtn.addEventListener('click', sendMessage);
+    $messageInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    // Initial load
+    refreshSessions().catch(() => {});
+  </script>
+</body>
+</html>
+
+
