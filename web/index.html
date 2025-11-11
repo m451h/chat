@@ -142,7 +142,7 @@
     <div class="row">
       <button id="startBtn">Start Session</button>
     </div>
-    <p class="muted">Use your own patient JSON. It will be stored for the session context.</p>
+    <p class="muted">Enter any JSON or text. It will be stored for the session context and passed to the LLM.</p>
   </aside>
   <header>
     <strong>EHR Chatbot Demo</strong>
@@ -237,11 +237,18 @@
         return;
       }
       let patient;
-      try {
-        patient = JSON.parse($patientJson.value || '{}');
-      } catch (e) {
-        alert('Patient JSON is invalid');
-        return;
+      const jsonText = $patientJson.value.trim();
+      if (!jsonText) {
+        patient = {};
+      } else {
+        try {
+          // Try to parse as JSON
+          patient = JSON.parse(jsonText);
+        } catch (e) {
+          // If parsing fails, wrap the raw text in a dict so backend accepts it
+          // The LLM will receive this in the prompt anyway
+          patient = { "raw_data": jsonText };
+        }
       }
       const payload = {
         user_id: Number(uid),
