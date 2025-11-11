@@ -19,7 +19,7 @@ if not exist .env (
 REM Check if virtual environment exists
 if not exist venv (
     echo 📦 Creating virtual environment...
-    python -m venv venv
+    python3 -m venv venv
 )
 
 REM Activate virtual environment
@@ -28,12 +28,20 @@ call venv\Scripts\activate.bat
 
 REM Install dependencies
 echo 📥 Installing dependencies...
-pip install -q -r requirements.txt
+python3 -m pip install -q -r requirements.txt
+
+REM Run API server in background
+echo.
+echo 🚀 Starting API server...
+start "EHR Chatbot API" cmd /k "python3 -m uvicorn api.main:app --reload --host 0.0.0.0 --port 8000"
+timeout /t 2 /nobreak >nul
 
 REM Run Streamlit app
 echo.
-echo ✅ Starting application...
-echo 🌐 Open your browser at: http://localhost:8501
+echo ✅ Starting Streamlit application...
+echo 🌐 Streamlit UI: http://localhost:8501
+echo 🔌 API Server: http://localhost:8000
+echo 📚 API Docs: http://localhost:8000/docs
 echo.
 
 streamlit run main.py
