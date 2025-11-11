@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -19,6 +20,7 @@ from db import (
     create_chat_session,
     get_user_sessions,
     get_session_by_id,
+    get_condition_by_id,
     add_message,
     get_session_messages,
 )
@@ -113,6 +115,40 @@ def _db_messages_to_history(messages: List) -> List[Dict[str, str]]:
 
 
 # ====== Routes ======
+@app.post("/sessions/start_simple", summary="Start a chat session without generating initial content")
+def start_session_simple(payload: StartSessionRequest, db: Session = Depends(get_db)):
+    # Ensure user exists
+    user = get_or_create_user(db, payload.user_id)
+
+    # Persist patient JSON to mock_data with unique name
+    unique_name = f"api_{payload.user_id}_{uuid.uuid4().hex}.json"
+    relative_file_name = _save_patient_json_to_mock_data(unique_name, payload.patient_data)
+
+    # Find or create a condition for this user using provided display name
+    existing_conditions = get_user_conditions(db, payload.user_id)
+    condition = next((c for c in existing_conditions if c.name == payload.condition_name), None)
+    if not condition:
+        condition = create_condition(
+            db=db,
+            user_id=payload.user_id,
+            name=payload.condition_name,
+            name_en=payload.condition_name,  # reuse name as key
+            data_file=relative_file_name,
+        )
+
+    # Create chat session
+    session = create_chat_session(db, user_id=payload.user_id, condition_id=condition.id)
+
+    # Store only system patient context; assistant note will be generated via streaming endpoint
+    add_message(db, session_id=session.id, role="system", content=f"patient_context:{json.dumps(payload.patient_data, ensure_ascii=False)}")
+
+    return {
+        "session_id": session.id,
+        "user_id": payload.user_id,
+        "condition_id": condition.id,
+        "condition_name": payload.condition_name,
+    }
+
 @app.post("/sessions/start", response_model=StartSessionResponse, summary="Start a chat session with patient JSON")
 def start_session(payload: StartSessionRequest, db: Session = Depends(get_db)):
     # Ensure user exists
@@ -160,6 +196,32 @@ def start_session(payload: StartSessionRequest, db: Session = Depends(get_db)):
     )
 
 
+@app.get("/sessions/{session_id}/education/stream", summary="Stream educational content for a session")
+def stream_educational_content(session_id: int, db: Session = Depends(get_db)):
+    session = get_session_by_id(db, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    condition = get_condition_by_id(db, session.condition_id)
+    if not condition:
+        raise HTTPException(status_code=404, detail="Condition not found")
+
+    def generator():
+        full = ""
+        for chunk in chatbot.generate_educational_content_stream(
+            condition_name=condition.name,
+            condition_data_file=condition.data_file,
+            session_id=session_id,
+        ):
+            text = str(chunk)
+            full += text
+            yield text
+        # Persist assistant message after streaming completes
+        if full:
+            add_message(db, session_id=session_id, role="assistant", content=full)
+
+    return StreamingResponse(generator(), media_type="text/plain; charset=utf-8")
+
+
 @app.post("/sessions/{session_id}/messages", response_model=SendMessageResponse, summary="Send a chat message to a session")
 def send_message(session_id: int, payload: SendMessageRequest, db: Session = Depends(get_db)):
     session = get_session_by_id(db, session_id)
@@ -183,6 +245,36 @@ def send_message(session_id: int, payload: SendMessageRequest, db: Session = Dep
         session_id=session_id,
         reply=ChatMessage(role="assistant", content=msg.content, created_at=msg.created_at),
     )
+
+
+@app.post("/sessions/{session_id}/messages/stream", summary="Stream chat reply for a session")
+def send_message_stream(session_id: int, payload: SendMessageRequest, db: Session = Depends(get_db)):
+    session = get_session_by_id(db, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Persist user message immediately
+    add_message(db, session_id=session_id, role="user", content=payload.message)
+
+    # Prepare history for the chatbot
+    history_rows = get_session_messages(db, session_id=session_id)
+    history = _db_messages_to_history(history_rows)
+
+    def generator():
+        full = ""
+        for chunk in chatbot.chat_stream(
+            question=payload.message,
+            session_id=session_id,
+            conversation_history=history if history else None,
+        ):
+            text = str(chunk)
+            full += text
+            yield text
+        # Persist assistant reply after streaming finishes
+        if full:
+            add_message(db, session_id=session_id, role="assistant", content=full)
+
+    return StreamingResponse(generator(), media_type="text/plain; charset=utf-8")
 
 
 @app.get("/sessions", response_model=List[SessionSummary], summary="List sessions for a user")

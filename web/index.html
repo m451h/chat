@@ -229,6 +229,27 @@
       messages.forEach(m => renderMessage(m.role, m.content));
     }
 
+    async function streamToChat(url, options = {}) {
+      const res = await fetch(url, options);
+      if (!res.ok || !res.body) {
+        const err = await res.text().catch(() => '');
+        throw new Error(err || res.statusText);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let assistantMsg = el('div', 'msg assistant', '');
+      let accumulated = '';
+      $chat.appendChild(assistantMsg);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        accumulated += chunk;
+        assistantMsg.textContent = accumulated;
+        $chat.scrollTop = $chat.scrollHeight;
+      }
+    }
+
     async function startSession() {
       const uid = $userId.value.trim();
       const cname = $conditionName.value.trim() || 'Condition';
@@ -255,7 +276,8 @@
         condition_name: cname,
         patient_data: patient
       };
-      const res = await fetch(`${API_BASE}/sessions/start`, {
+      // Create session without initial message (we will stream it next)
+      const res = await fetch(`${API_BASE}/sessions/start_simple`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -268,8 +290,11 @@
       const data = await res.json();
       currentSessionId = data.session_id;
       clearChat();
-      if (data.initial_message && data.initial_message.content) {
-        renderMessage('assistant', data.initial_message.content);
+      // Stream educational content
+      try {
+        await streamToChat(`${API_BASE}/sessions/${currentSessionId}/education/stream`);
+      } catch (e) {
+        alert('Failed to stream education: ' + e.message);
       }
       await refreshSessions();
     }
@@ -283,18 +308,15 @@
       if (!text) return;
       renderMessage('user', text);
       $messageInput.value = '';
-      const res = await fetch(`${API_BASE}/sessions/${currentSessionId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text })
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        alert('Failed to send: ' + (err.detail || res.statusText));
-        return;
+      try {
+        await streamToChat(`${API_BASE}/sessions/${currentSessionId}/messages/stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text })
+        });
+      } catch (e) {
+        alert('Failed to stream reply: ' + e.message);
       }
-      const data = await res.json();
-      renderMessage('assistant', data.reply.content);
       await refreshSessions();
     }
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from langchain_openai import ChatOpenAI
 from langchain.memory import ConversationBufferWindowMemory
-from langchain.chains.conversation import ConversationChain
+from langchain.chains import ConversationChain
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 
