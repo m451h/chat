@@ -120,10 +120,6 @@ def start_session_simple(payload: StartSessionRequest, db: Session = Depends(get
     # Ensure user exists
     user = get_or_create_user(db, payload.user_id)
 
-    # Persist patient JSON to mock_data with unique name
-    unique_name = f"api_{payload.user_id}_{uuid.uuid4().hex}.json"
-    relative_file_name = _save_patient_json_to_mock_data(unique_name, payload.patient_data)
-
     # Find or create a condition for this user using provided display name
     existing_conditions = get_user_conditions(db, payload.user_id)
     condition = next((c for c in existing_conditions if c.name == payload.condition_name), None)
@@ -133,7 +129,7 @@ def start_session_simple(payload: StartSessionRequest, db: Session = Depends(get
             user_id=payload.user_id,
             name=payload.condition_name,
             name_en=payload.condition_name,  # reuse name as key
-            data_file=relative_file_name,
+            data_file="",  # no file persistence
         )
 
     # Create chat session
@@ -154,10 +150,6 @@ def start_session(payload: StartSessionRequest, db: Session = Depends(get_db)):
     # Ensure user exists
     user = get_or_create_user(db, payload.user_id)
 
-    # Persist patient JSON to mock_data with unique name
-    unique_name = f"api_{payload.user_id}_{uuid.uuid4().hex}.json"
-    relative_file_name = _save_patient_json_to_mock_data(unique_name, payload.patient_data)
-
     # Find or create a condition for this user using provided display name
     existing_conditions = get_user_conditions(db, payload.user_id)
     condition = next((c for c in existing_conditions if c.name == payload.condition_name), None)
@@ -167,7 +159,7 @@ def start_session(payload: StartSessionRequest, db: Session = Depends(get_db)):
             user_id=payload.user_id,
             name=payload.condition_name,
             name_en=payload.condition_name,  # reuse name as key
-            data_file=relative_file_name,
+            data_file="",  # no file persistence
         )
 
     # Create chat session
@@ -176,8 +168,8 @@ def start_session(payload: StartSessionRequest, db: Session = Depends(get_db)):
     # Generate initial educational content
     content = chatbot.generate_educational_content(
         condition_name=payload.condition_name,
-        condition_data_file=relative_file_name,
         session_id=session.id,
+        condition_data=payload.patient_data,
     )
 
     # Store messages to DB: system context + assistant note
@@ -205,12 +197,24 @@ def stream_educational_content(session_id: int, db: Session = Depends(get_db)):
     if not condition:
         raise HTTPException(status_code=404, detail="Condition not found")
 
+    # Extract patient context from system messages for this session
+    rows = get_session_messages(db, session_id=session_id)
+    patient_context: Dict[str, Any] = {}
+    for r in rows:
+        if r.role == "system" and isinstance(r.content, str) and r.content.startswith("patient_context:"):
+            try:
+                payload_str = r.content[len("patient_context:"):]
+                patient_context = json.loads(payload_str)
+            except Exception:
+                patient_context = {}
+            break
+
     def generator():
         full = ""
         for chunk in chatbot.generate_educational_content_stream(
             condition_name=condition.name,
-            condition_data_file=condition.data_file,
             session_id=session_id,
+            condition_data=patient_context,
         ):
             text = str(chunk)
             full += text

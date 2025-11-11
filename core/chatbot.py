@@ -82,8 +82,9 @@ class MedicalChatbot:
     def generate_educational_content(
         self,
         condition_name: str,
-        condition_data_file: str,
-        session_id: int
+        condition_data_file: Optional[str] = None,
+        session_id: int = 0,
+        condition_data: Optional[Dict] = None,
     ) -> str:
         """
         Generate initial educational content about a condition
@@ -97,8 +98,12 @@ class MedicalChatbot:
             Educational content in Persian
         """
         try:
-            # Load user's condition data
-            condition_data = self._load_condition_data(condition_data_file)
+            # Load user's condition data (prefer direct dict if provided)
+            if condition_data is None:
+                if not condition_data_file:
+                    condition_data = {}
+                else:
+                    condition_data = self._load_condition_data(condition_data_file)
             
             # Generate educational prompt
             prompt = get_educational_prompt(condition_name, condition_data)
@@ -123,8 +128,9 @@ class MedicalChatbot:
     def generate_educational_content_stream(
         self,
         condition_name: str,
-        condition_data_file: str,
-        session_id: int
+        condition_data_file: Optional[str] = None,
+        session_id: int = 0,
+        condition_data: Optional[Dict] = None,
     ) -> Generator[str, None, None]:
         """
         Stream educational content generation for better UX with long responses
@@ -138,8 +144,12 @@ class MedicalChatbot:
             Chunks of educational content
         """
         try:
-            # Load user's condition data
-            condition_data = self._load_condition_data(condition_data_file)
+            # Load user's condition data (prefer direct dict if provided)
+            if condition_data is None:
+                if not condition_data_file:
+                    condition_data = {}
+                else:
+                    condition_data = self._load_condition_data(condition_data_file)
             
             # Generate educational prompt
             prompt = get_educational_prompt(condition_name, condition_data)
