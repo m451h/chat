@@ -1,7 +1,7 @@
 """
 Persian prompt templates for medical chatbot
 """
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 def get_educational_prompt(condition_name: str, condition_data: dict) -> str:
     """

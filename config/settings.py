@@ -20,7 +20,10 @@ class Settings:
     )
     OPENAI_MODEL: str = "gpt-4o-mini"
     OPENAI_TEMPERATURE: float = 0.7
-    OPENAI_MAX_TOKENS: int = 2000
+    OPENAI_MAX_TOKENS: int = 2000  # Default/fallback
+    # Separate token limits for different use cases
+    EDUCATIONAL_MAX_TOKENS: int = int(os.getenv("EDUCATIONAL_MAX_TOKENS", "3000"))  # Longer for educational content
+    CHAT_MAX_TOKENS: int = int(os.getenv("CHAT_MAX_TOKENS", "1500"))  # Shorter for chat responses
     
     # Database Configuration
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./ehr_chatbot.db")

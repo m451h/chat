@@ -7,8 +7,9 @@ from pathlib import Path
 
 from langchain_openai import ChatOpenAI
 from langchain.memory import ConversationBufferWindowMemory
-from langchain.chains import ConversationChain
-from langchain.schema import HumanMessage, AIMessage, SystemMessage
+from langchain.chains.conversation import ConversationChain
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+
 
 from config.settings import settings
 from .prompts import get_educational_prompt, get_conversation_prompt, get_summarization_prompt
@@ -22,15 +23,28 @@ class MedicalChatbot:
     
     def __init__(self):
         """Initialize chatbot with OpenAI model"""
-        self.llm = ChatOpenAI(
-            model=settings.OPENAI_MODEL,
-            temperature=settings.OPENAI_TEMPERATURE,
-            max_tokens=settings.OPENAI_MAX_TOKENS,
-            # Use custom base URL if provided (supports OpenAI-compatible endpoints)
-            base_url=settings.OPENAI_BASE_URL or None,
-            openai_api_key=settings.OPENAI_API_KEY,
-            streaming=True
+        # Base LLM configuration (used as fallback)
+        self.base_llm_config = {
+            "model": settings.OPENAI_MODEL,
+            "temperature": settings.OPENAI_TEMPERATURE,
+            "base_url": settings.OPENAI_BASE_URL or None,
+            "openai_api_key": settings.OPENAI_API_KEY,
+            "streaming": True
+        }
+        
+        # Separate LLM instances for different use cases with different token limits
+        self.llm_educational = ChatOpenAI(
+            **self.base_llm_config,
+            max_tokens=settings.EDUCATIONAL_MAX_TOKENS
         )
+        
+        self.llm_chat = ChatOpenAI(
+            **self.base_llm_config,
+            max_tokens=settings.CHAT_MAX_TOKENS
+        )
+        
+        # Keep backward compatibility with self.llm (defaults to chat)
+        self.llm = self.llm_chat
         
         self.conversation_memory = {}  # Session-specific memory
     
@@ -89,9 +103,9 @@ class MedicalChatbot:
             # Generate educational prompt
             prompt = get_educational_prompt(condition_name, condition_data)
             
-            # Generate content
+            # Generate content using educational LLM with higher token limit
             messages = [HumanMessage(content=prompt)]
-            response = self.llm.invoke(messages)
+            response = self.llm_educational.invoke(messages)
             
             # Store in memory for context
             memory = self._get_memory(session_id)
@@ -130,11 +144,11 @@ class MedicalChatbot:
             # Generate educational prompt
             prompt = get_educational_prompt(condition_name, condition_data)
             
-            # Stream content
+            # Stream content using educational LLM with higher token limit
             messages = [HumanMessage(content=prompt)]
             full_response = ""
             
-            for chunk in self.llm.stream(messages):
+            for chunk in self.llm_educational.stream(messages):
                 content = chunk.content
                 full_response += content
                 yield content
@@ -175,10 +189,10 @@ class MedicalChatbot:
             # Get memory for this session
             memory = self._get_memory(session_id)
             
-            # Create conversation chain
+            # Create conversation chain using chat LLM with lower token limit
             prompt = get_conversation_prompt()
             chain = ConversationChain(
-                llm=self.llm,
+                llm=self.llm_chat,
                 prompt=prompt,
                 memory=memory,
                 input_key="question",
@@ -224,9 +238,9 @@ class MedicalChatbot:
             prompt = get_conversation_prompt()
             messages = prompt.format_messages(chat_history=chat_history, question=question)
             
-            # Stream response
+            # Stream response using chat LLM with lower token limit
             full_response = ""
-            for chunk in self.llm.stream(messages):
+            for chunk in self.llm_chat.stream(messages):
                 content = chunk.content
                 full_response += content
                 yield content
