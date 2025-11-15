@@ -106,10 +106,11 @@ def _save_patient_json_to_mock_data(file_name: str, data: Dict[str, Any]) -> str
 def _db_messages_to_history(messages: List) -> List[Dict[str, str]]:
     """
     Convert DB Message rows to the format expected by chatbot.chat(..., conversation_history=...).
+    Includes system messages so condition_data can be extracted.
     """
     history: List[Dict[str, str]] = []
     for m in messages:
-        if m.role in ("user", "assistant"):
+        if m.role in ("user", "assistant", "system"):
             history.append({"role": m.role, "content": m.content})
     return history
 
@@ -232,13 +233,25 @@ def send_message(session_id: int, payload: SendMessageRequest, db: Session = Dep
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Load DB history and get assistant reply
+    # Extract patient context from system messages (same as educational content)
     history_rows = get_session_messages(db, session_id=session_id)
+    patient_context: Dict[str, Any] = {}
+    for r in history_rows:
+        if r.role == "system" and isinstance(r.content, str) and r.content.startswith("patient_context:"):
+            try:
+                payload_str = r.content[len("patient_context:"):]
+                patient_context = json.loads(payload_str)
+            except Exception:
+                patient_context = {}
+            break
+
+    # Load DB history and get assistant reply
     history = _db_messages_to_history(history_rows)
     reply_text = chatbot.chat(
         question=payload.message,
         session_id=session_id,
         conversation_history=history if history else None,
+        condition_data=patient_context if patient_context else None,
     )
 
     # Persist both user message and assistant reply
@@ -260,8 +273,19 @@ def send_message_stream(session_id: int, payload: SendMessageRequest, db: Sessio
     # Persist user message immediately
     add_message(db, session_id=session_id, role="user", content=payload.message)
 
-    # Prepare history for the chatbot
+    # Extract patient context from system messages (same as educational content)
     history_rows = get_session_messages(db, session_id=session_id)
+    patient_context: Dict[str, Any] = {}
+    for r in history_rows:
+        if r.role == "system" and isinstance(r.content, str) and r.content.startswith("patient_context:"):
+            try:
+                payload_str = r.content[len("patient_context:"):]
+                patient_context = json.loads(payload_str)
+            except Exception:
+                patient_context = {}
+            break
+
+    # Prepare history for the chatbot
     history = _db_messages_to_history(history_rows)
 
     def generator():
@@ -270,6 +294,7 @@ def send_message_stream(session_id: int, payload: SendMessageRequest, db: Sessio
             question=payload.message,
             session_id=session_id,
             conversation_history=history if history else None,
+            condition_data=patient_context if patient_context else None,
         ):
             text = str(chunk)
             full += text

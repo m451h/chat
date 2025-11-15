@@ -1,7 +1,57 @@
 """
 Persian prompt templates for medical chatbot
 """
+import json
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+
+def _format_condition_data(condition_data: dict) -> str:
+    """
+    Safely format condition_data to string, handling nested structures
+    
+    Args:
+        condition_data: Dictionary with patient data (may contain nested dicts/lists)
+    
+    Returns:
+        Formatted string representation
+    """
+    if not condition_data:
+        return ""
+    
+    def format_value(key, value, indent=0):
+        """Recursively format nested values"""
+        prefix = "  " * indent
+        if isinstance(value, dict):
+            lines = [f"{prefix}- {key}:"]
+            for k, v in value.items():
+                lines.extend(format_value(k, v, indent + 1))
+            return lines
+        elif isinstance(value, list):
+            lines = [f"{prefix}- {key}:"]
+            for i, item in enumerate(value):
+                if isinstance(item, (dict, list)):
+                    lines.extend(format_value(f"[{i}]", item, indent + 1))
+                else:
+                    lines.append(f"{prefix}  - {item}")
+            return lines
+        else:
+            return [f"{prefix}- {key}: {value}"]
+    
+    lines = []
+    for key, value in condition_data.items():
+        try:
+            if isinstance(value, (dict, list)):
+                # Use recursive formatting for nested structures
+                formatted = format_value(key, value)
+                lines.extend(formatted)
+            else:
+                lines.append(f"- {key}: {value}")
+        except Exception as e:
+            # Fallback: just convert to string
+            lines.append(f"- {key}: {str(value)}")
+    
+    return "\n".join(lines)
+
 
 def get_educational_prompt(condition_name: str, condition_data: dict) -> str:
     """
@@ -14,7 +64,7 @@ def get_educational_prompt(condition_name: str, condition_data: dict) -> str:
     Returns:
         Formatted prompt string
     """
-    data_str = "\n".join([f"- {key}: {value}" for key, value in condition_data.items()])
+    data_str = _format_condition_data(condition_data)
     
     prompt = f"""شما یک دستیار پزشکی هوشمند و آموزشی هستید که به زبان فارسی با بیماران صحبت می‌کنید.
 
@@ -44,14 +94,17 @@ def get_educational_prompt(condition_name: str, condition_data: dict) -> str:
     return prompt
 
 
-def get_conversation_prompt() -> ChatPromptTemplate:
+def get_conversation_prompt(condition_data: dict = None) -> ChatPromptTemplate:
     """
     Create conversation prompt template for follow-up questions
+    
+    Args:
+        condition_data: User-specific data about the condition (optional)
     
     Returns:
         ChatPromptTemplate for conversation
     """
-    system_message = """شما یک دستیار گفتگوی پزشکی هستید که به زبان فارسی با بیماران صحبت می‌کنید.
+    base_system_message = """شما یک دستیار گفتگوی پزشکی هستید که به زبان فارسی با بیماران صحبت می‌کنید.
 
 هدف شما ارائه پاسخ‌های کوتاه، چت‌محور، علمی و قابل فهم به پرسش‌های بیماران درباره بیماری یا شرایطشان است.
 در صورت امکان، پاسخ را مختصر و مفید بیان کنید و به اصل سوال پاسخ دهید.
@@ -66,7 +119,22 @@ def get_conversation_prompt() -> ChatPromptTemplate:
 - اگر سوال خارج از موضوعات پزشکی بود، محترمانه اعلام کنید که فقط درباره مسائل پزشکی می‌توانید کمک کنید
 - اگر سوال به مشاوره پزشک نیاز دارد، بیمار را تشویق کنید با پزشک تماس بگیرد
 - از ارائه تجویز دارو یا تشخیص قطعی خودداری کنید
-- از ارائه تشخیص قطعی یا تجویز دارو خودداری کنیداطلاعات مورد نیاز در تاریخچه گفتگو موجود است."""
+- از ارائه تشخیص قطعی یا تجویز دارو خودداری کنید"""
+
+    # Add patient context if available
+    if condition_data:
+        data_str = _format_condition_data(condition_data)
+        # Use string concatenation instead of f-string to avoid curly brace conflicts
+        system_message = base_system_message + """
+
+اطلاعات شخصی بیمار برای پاسخ‌دهی شخصی‌سازی شده:
+""" + data_str + """
+
+اطلاعات مورد نیاز در تاریخچه گفتگو نیز موجود است."""
+    else:
+        system_message = base_system_message + """
+
+اطلاعات مورد نیاز در تاریخچه گفتگو موجود است."""
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_message),

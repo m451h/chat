@@ -79,6 +79,22 @@ class MedicalChatbot:
             elif msg['role'] == 'assistant':
                 memory.chat_memory.add_message(AIMessage(content=msg['content']))
     
+    def _extract_condition_data(self, conversation_history: Optional[List[Dict]]) -> Optional[Dict]:
+        """Extract condition_data from conversation history (system message with patient_context prefix)"""
+        if not conversation_history:
+            return None
+        
+        for msg in conversation_history:
+            if msg.get('role') == 'system' and isinstance(msg.get('content'), str):
+                content = msg['content']
+                if content.startswith('patient_context:'):
+                    try:
+                        payload_str = content[len('patient_context:'):]
+                        return json.loads(payload_str)
+                    except (json.JSONDecodeError, KeyError):
+                        return None
+        return None
+    
     def generate_educational_content(
         self,
         condition_name: str,
@@ -178,7 +194,8 @@ class MedicalChatbot:
         self,
         question: str,
         session_id: int,
-        conversation_history: Optional[List[Dict]] = None
+        conversation_history: Optional[List[Dict]] = None,
+        condition_data: Optional[Dict] = None
     ) -> str:
         """
         Answer user's question about their condition
@@ -187,11 +204,17 @@ class MedicalChatbot:
             question: User's question in Persian
             session_id: Chat session ID
             conversation_history: Previous messages (from database)
+            condition_data: Patient condition data (same as used for educational content).
+                          If not provided, will be extracted from conversation_history.
         
         Returns:
             Answer in Persian
         """
         try:
+            # Get condition_data: prefer direct parameter, fallback to extraction from history
+            if condition_data is None:
+                condition_data = self._extract_condition_data(conversation_history)
+            
             # Load conversation history if provided
             if conversation_history:
                 self._load_conversation_history(session_id, conversation_history)
@@ -200,7 +223,7 @@ class MedicalChatbot:
             memory = self._get_memory(session_id)
             
             # Create conversation chain using chat LLM with lower token limit
-            prompt = get_conversation_prompt()
+            prompt = get_conversation_prompt(condition_data=condition_data)
             chain = ConversationChain(
                 llm=self.llm_chat,
                 prompt=prompt,
@@ -216,13 +239,16 @@ class MedicalChatbot:
         
         except Exception as e:
             print(f"Error in chat: {e}")
+            import traceback
+            traceback.print_exc()
             return f"متأسفانه در پاسخ به سوال شما خطایی رخ داد. لطفاً دوباره تلاش کنید.\n\nخطا: {str(e)}"
     
     def chat_stream(
         self,
         question: str,
         session_id: int,
-        conversation_history: Optional[List[Dict]] = None
+        conversation_history: Optional[List[Dict]] = None,
+        condition_data: Optional[Dict] = None
     ) -> Generator[str, None, None]:
         """
         Stream answer to user's question for better UX
@@ -231,11 +257,17 @@ class MedicalChatbot:
             question: User's question in Persian
             session_id: Chat session ID
             conversation_history: Previous messages (from database)
+            condition_data: Patient condition data (same as used for educational content).
+                          If not provided, will be extracted from conversation_history.
         
         Yields:
             Chunks of the answer
         """
         try:
+            # Get condition_data: prefer direct parameter, fallback to extraction from history
+            if condition_data is None:
+                condition_data = self._extract_condition_data(conversation_history)
+            
             # Load conversation history if provided
             if conversation_history:
                 self._load_conversation_history(session_id, conversation_history)
@@ -245,7 +277,7 @@ class MedicalChatbot:
             chat_history = memory.load_memory_variables({})['chat_history']
             
             # Build messages
-            prompt = get_conversation_prompt()
+            prompt = get_conversation_prompt(condition_data=condition_data)
             messages = prompt.format_messages(chat_history=chat_history, question=question)
             
             # Stream response using chat LLM with lower token limit
@@ -260,6 +292,8 @@ class MedicalChatbot:
             memory.chat_memory.add_message(AIMessage(content=full_response))
         
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             error_msg = f"متأسفانه در پاسخ به سوال شما خطایی رخ داد: {str(e)}"
             yield error_msg
     
