@@ -1,337 +1,201 @@
-from pathlib import Path
-import json
-import uuid
-from datetime import datetime
-from typing import List, Optional, Dict, Any
-
-from fastapi import FastAPI, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+"""
+FastAPI application for EHR Chatbot API
+"""
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from fastapi.responses import HTMLResponse
+from typing import List, Dict, Any
+import sys
+from pathlib import Path
 
-from config.settings import settings
+# Add parent directory to path to import core modules
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from core.chatbot import MedicalChatbot
-from db import (
-    get_db,
-    get_or_create_user,
-    create_condition,
-    get_user_conditions,
-    create_chat_session,
-    get_user_sessions,
-    get_session_by_id,
-    get_condition_by_id,
-    add_message,
-    get_session_messages,
+from api.models import (
+    GenerateInitialMessageRequest,
+    GenerateInitialMessageResponse,
+    ChatRequest,
+    ChatResponse,
+    Message
 )
+from config.settings import settings
 
-
+# Initialize FastAPI app
 app = FastAPI(
     title="EHR Chatbot API",
-    description="FastAPI service mirroring the Streamlit UI flow for frontend integration.",
+    description="API for medical educational chatbot",
     version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json"
 )
 
-# Allow all origins by default (customize for production)
+# Add CORS middleware to allow Java backend to call the API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # In production, specify your Java backend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Singleton chatbot
-chatbot = MedicalChatbot()
+# Initialize chatbot instance (lazy initialization)
+chatbot = None
 
 
-# ====== Schemas ======
-class StartSessionRequest(BaseModel):
-    user_id: int = Field(..., description="Unique user identifier")
-    condition_name: str = Field(..., description="Condition name (display)")
-    patient_data: Dict[str, Any] = Field(..., description="Arbitrary patient JSON for this context")
+def get_chatbot():
+    """Get or initialize chatbot instance"""
+    global chatbot
+    if chatbot is None:
+        try:
+            chatbot = MedicalChatbot()
+        except Exception as e:
+            print(f"Error initializing chatbot: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+    return chatbot
 
 
-class InitialMessage(BaseModel):
-    type: str = Field("education_note", description="Message type")
-    content: str = Field(..., description="Model-generated educational content")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Optional metadata")
+@app.on_event("startup")
+async def startup_event():
+    """Validate settings and initialize chatbot on startup"""
+    print("🚀 Starting EHR Chatbot API...")
+    try:
+        settings.validate()
+        print("✅ Settings validated")
+        # Initialize chatbot on startup to catch errors early
+        get_chatbot()
+        print("✅ Chatbot initialized")
+        print("✅ API started successfully!")
+        print(f"📚 API Docs: http://localhost:8000/docs")
+        print(f"🔍 Health Check: http://localhost:8000/health")
+    except Exception as e:
+        print(f"❌ Configuration error: {e}")
+        import traceback
+        traceback.print_exc()
+        print("⚠️  Server will start but endpoints may not work properly")
+        # Don't raise - let the server start but endpoints will fail gracefully
 
 
-class StartSessionResponse(BaseModel):
-    session_id: int
-    user_id: int
-    condition_id: int
-    condition_name: str
-    initial_message: InitialMessage
-
-
-class SendMessageRequest(BaseModel):
-    message: str
-
-
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-    created_at: datetime
-
-
-class SendMessageResponse(BaseModel):
-    session_id: int
-    reply: ChatMessage
-
-
-class SessionSummary(BaseModel):
-    id: int
-    title: Optional[str]
-    updated_at: Optional[datetime]
-    condition_id: int
-
-
-# ====== Helpers ======
-def _save_patient_json_to_mock_data(file_name: str, data: Dict[str, Any]) -> str:
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    """Health check endpoint with HTML response"""
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>EHR Chatbot API</title>
+        <style>
+            body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+            h1 { color: #2c3e50; }
+            .status { background: #27ae60; color: white; padding: 10px; border-radius: 5px; }
+            a { color: #3498db; text-decoration: none; margin-right: 20px; }
+            a:hover { text-decoration: underline; }
+        </style>
+    </head>
+    <body>
+        <h1>🩺 EHR Chatbot API</h1>
+        <div class="status">✅ API is running!</div>
+        <h2>Available Endpoints:</h2>
+        <ul>
+            <li><a href="/docs">📚 Interactive API Documentation (Swagger UI)</a></li>
+            <li><a href="/redoc">📖 Alternative API Documentation (ReDoc)</a></li>
+            <li><a href="/health">💚 Health Check</a></li>
+            <li><strong>POST</strong> /generate-initial-message - Generate initial educational message</li>
+            <li><strong>POST</strong> /chat - Chat with the bot</li>
+        </ul>
+        <h2>Quick Test:</h2>
+        <p>Try the <a href="/docs">API documentation</a> to test the endpoints interactively.</p>
+    </body>
+    </html>
     """
-    Save patient JSON into mock_data so existing loader can find it.
-    Returns the relative file name stored in the DB.
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
+    return {"status": "healthy"}
+
+
+@app.post("/generate-initial-message", response_model=GenerateInitialMessageResponse)
+async def generate_initial_message(request: GenerateInitialMessageRequest):
     """
-    mock_dir = settings.MOCK_DATA_DIR
-    mock_dir.mkdir(parents=True, exist_ok=True)
-    target_path = mock_dir / file_name
-    with open(target_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    # Store only file name; MedicalChatbot loader prefixes MOCK_DATA_DIR
-    return file_name
-
-
-def _db_messages_to_history(messages: List) -> List[Dict[str, str]]:
+    Generate initial educational message based on context
+    
+    Args:
+        request: Contains context with condition_name and condition_data
+    
+    Returns:
+        Generated educational message
     """
-    Convert DB Message rows to the format expected by chatbot.chat(..., conversation_history=...).
-    Includes system messages so condition_data can be extracted.
-    """
-    history: List[Dict[str, str]] = []
-    for m in messages:
-        if m.role in ("user", "assistant", "system"):
-            history.append({"role": m.role, "content": m.content})
-    return history
-
-
-# ====== Routes ======
-@app.post("/sessions/start_simple", summary="Start a chat session without generating initial content")
-def start_session_simple(payload: StartSessionRequest, db: Session = Depends(get_db)):
-    # Ensure user exists
-    user = get_or_create_user(db, payload.user_id)
-
-    # Find or create a condition for this user using provided display name
-    existing_conditions = get_user_conditions(db, payload.user_id)
-    condition = next((c for c in existing_conditions if c.name == payload.condition_name), None)
-    if not condition:
-        condition = create_condition(
-            db=db,
-            user_id=payload.user_id,
-            name=payload.condition_name,
-            name_en=payload.condition_name,  # reuse name as key
-            data_file="",  # no file persistence
+    try:
+        context = request.context
+        chatbot_instance = get_chatbot()
+        
+        # Generate educational content using non-streaming version
+        message = chatbot_instance.generate_educational_content(
+            condition_name=context.condition_name,
+            condition_data=context.condition_data,
+            session_id=0  # Session will be managed by Java backend
+        )
+        
+        return GenerateInitialMessageResponse(
+            message=message,
+            success=True
+        )
+    
+    except Exception as e:
+        print(f"Error in generate_initial_message: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error generating initial message: {str(e)}"
         )
 
-    # Create chat session
-    session = create_chat_session(db, user_id=payload.user_id, condition_id=condition.id)
 
-    # Store only system patient context; assistant note will be generated via streaming endpoint
-    add_message(db, session_id=session.id, role="system", content=f"patient_context:{json.dumps(payload.patient_data, ensure_ascii=False)}")
-
-    return {
-        "session_id": session.id,
-        "user_id": payload.user_id,
-        "condition_id": condition.id,
-        "condition_name": payload.condition_name,
-    }
-
-@app.post("/sessions/start", response_model=StartSessionResponse, summary="Start a chat session with patient JSON")
-def start_session(payload: StartSessionRequest, db: Session = Depends(get_db)):
-    # Ensure user exists
-    user = get_or_create_user(db, payload.user_id)
-
-    # Find or create a condition for this user using provided display name
-    existing_conditions = get_user_conditions(db, payload.user_id)
-    condition = next((c for c in existing_conditions if c.name == payload.condition_name), None)
-    if not condition:
-        condition = create_condition(
-            db=db,
-            user_id=payload.user_id,
-            name=payload.condition_name,
-            name_en=payload.condition_name,  # reuse name as key
-            data_file="",  # no file persistence
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """
+    Handle chat messages from user
+    
+    Args:
+        request: Contains question, session_id, conversation_history, and optional condition_data
+    
+    Returns:
+        Chat response from the chatbot
+    """
+    try:
+        # Convert Pydantic Message models to dict format expected by chatbot
+        conversation_history = None
+        if request.conversation_history:
+            conversation_history = [
+                {"role": msg.role, "content": msg.content}
+                for msg in request.conversation_history
+            ]
+        
+        # Call non-streaming chat function
+        chatbot_instance = get_chatbot()
+        answer = chatbot_instance.chat(
+            question=request.question,
+            session_id=request.session_id,
+            conversation_history=conversation_history,
+            condition_data=request.condition_data
         )
-
-    # Create chat session
-    session = create_chat_session(db, user_id=payload.user_id, condition_id=condition.id)
-
-    # Generate initial educational content
-    content = chatbot.generate_educational_content(
-        condition_name=payload.condition_name,
-        session_id=session.id,
-        condition_data=payload.patient_data,
-    )
-
-    # Store messages to DB: system context + assistant note
-    add_message(db, session_id=session.id, role="system", content=f"patient_context:{json.dumps(payload.patient_data, ensure_ascii=False)}")
-    add_message(db, session_id=session.id, role="assistant", content=content)
-
-    return StartSessionResponse(
-        session_id=session.id,
-        user_id=payload.user_id,
-        condition_id=condition.id,
-        condition_name=payload.condition_name,
-        initial_message=InitialMessage(
-            content=content,
-            metadata={"patient_context_digest": True},
-        ),
-    )
-
-
-@app.get("/sessions/{session_id}/education/stream", summary="Stream educational content for a session")
-def stream_educational_content(session_id: int, db: Session = Depends(get_db)):
-    session = get_session_by_id(db, session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    condition = get_condition_by_id(db, session.condition_id)
-    if not condition:
-        raise HTTPException(status_code=404, detail="Condition not found")
-
-    # Extract patient context from system messages for this session
-    rows = get_session_messages(db, session_id=session_id)
-    patient_context: Dict[str, Any] = {}
-    for r in rows:
-        if r.role == "system" and isinstance(r.content, str) and r.content.startswith("patient_context:"):
-            try:
-                payload_str = r.content[len("patient_context:"):]
-                patient_context = json.loads(payload_str)
-            except Exception:
-                patient_context = {}
-            break
-
-    def generator():
-        full = ""
-        for chunk in chatbot.generate_educational_content_stream(
-            condition_name=condition.name,
-            session_id=session_id,
-            condition_data=patient_context,
-        ):
-            text = str(chunk)
-            full += text
-            yield text
-        # Persist assistant message after streaming completes
-        if full:
-            add_message(db, session_id=session_id, role="assistant", content=full)
-
-    return StreamingResponse(generator(), media_type="text/plain; charset=utf-8")
-
-
-@app.post("/sessions/{session_id}/messages", response_model=SendMessageResponse, summary="Send a chat message to a session")
-def send_message(session_id: int, payload: SendMessageRequest, db: Session = Depends(get_db)):
-    session = get_session_by_id(db, session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    # Extract patient context from system messages (same as educational content)
-    history_rows = get_session_messages(db, session_id=session_id)
-    patient_context: Dict[str, Any] = {}
-    for r in history_rows:
-        if r.role == "system" and isinstance(r.content, str) and r.content.startswith("patient_context:"):
-            try:
-                payload_str = r.content[len("patient_context:"):]
-                patient_context = json.loads(payload_str)
-            except Exception:
-                patient_context = {}
-            break
-
-    # Load DB history and get assistant reply
-    history = _db_messages_to_history(history_rows)
-    reply_text = chatbot.chat(
-        question=payload.message,
-        session_id=session_id,
-        conversation_history=history if history else None,
-        condition_data=patient_context if patient_context else None,
-    )
-
-    # Persist both user message and assistant reply
-    add_message(db, session_id=session_id, role="user", content=payload.message)
-    msg = add_message(db, session_id=session_id, role="assistant", content=reply_text)
-
-    return SendMessageResponse(
-        session_id=session_id,
-        reply=ChatMessage(role="assistant", content=msg.content, created_at=msg.created_at),
-    )
-
-
-@app.post("/sessions/{session_id}/messages/stream", summary="Stream chat reply for a session")
-def send_message_stream(session_id: int, payload: SendMessageRequest, db: Session = Depends(get_db)):
-    session = get_session_by_id(db, session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    # Persist user message immediately
-    add_message(db, session_id=session_id, role="user", content=payload.message)
-
-    # Extract patient context from system messages (same as educational content)
-    history_rows = get_session_messages(db, session_id=session_id)
-    patient_context: Dict[str, Any] = {}
-    for r in history_rows:
-        if r.role == "system" and isinstance(r.content, str) and r.content.startswith("patient_context:"):
-            try:
-                payload_str = r.content[len("patient_context:"):]
-                patient_context = json.loads(payload_str)
-            except Exception:
-                patient_context = {}
-            break
-
-    # Prepare history for the chatbot
-    history = _db_messages_to_history(history_rows)
-
-    def generator():
-        full = ""
-        for chunk in chatbot.chat_stream(
-            question=payload.message,
-            session_id=session_id,
-            conversation_history=history if history else None,
-            condition_data=patient_context if patient_context else None,
-        ):
-            text = str(chunk)
-            full += text
-            yield text
-        # Persist assistant reply after streaming finishes
-        if full:
-            add_message(db, session_id=session_id, role="assistant", content=full)
-
-    return StreamingResponse(generator(), media_type="text/plain; charset=utf-8")
-
-
-@app.get("/sessions", response_model=List[SessionSummary], summary="List sessions for a user")
-def list_sessions(user_id: int, db: Session = Depends(get_db)):
-    sessions = get_user_sessions(db, user_id=user_id)
-    return [
-        SessionSummary(
-            id=s.id,
-            title=getattr(s, "title", None),
-            updated_at=getattr(s, "updated_at", None),
-            condition_id=s.condition_id,
+        
+        return ChatResponse(
+            answer=answer,
+            success=True
         )
-        for s in sessions
-    ]
-
-
-@app.get("/sessions/{session_id}/messages", response_model=List[ChatMessage], summary="Get messages for a session")
-def get_messages(session_id: int, db: Session = Depends(get_db)):
-    session = get_session_by_id(db, session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    rows = get_session_messages(db, session_id=session_id)
-    return [ChatMessage(role=r.role, content=r.content, created_at=r.created_at) for r in rows]
-
-
-# Health
-@app.get("/health", summary="Health check")
-def health():
-    return {"status": "ok"}
-
+    
+    except Exception as e:
+        print(f"Error in chat: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing chat message: {str(e)}"
+        )
 

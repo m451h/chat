@@ -29,7 +29,7 @@ class MedicalChatbot:
             "temperature": settings.OPENAI_TEMPERATURE,
             "base_url": settings.OPENAI_BASE_URL or None,
             "openai_api_key": settings.OPENAI_API_KEY,
-            "streaming": True
+            "streaming": False  # Disabled for API endpoints
         }
         
         # Separate LLM instances for different use cases with different token limits

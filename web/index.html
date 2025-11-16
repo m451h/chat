@@ -40,24 +40,14 @@
     #chat {
       padding: 16px;
       overflow-y: auto;
+      display: flex;
+      flex-direction: column;
     }
     #composer {
       border-top: 1px solid #eee;
       display: flex;
       gap: 8px;
       padding: 12px;
-    }
-    .session-item {
-      border: 1px solid #ddd;
-      border-radius: 8px;
-      padding: 8px;
-      margin-bottom: 8px;
-      cursor: pointer;
-      background: #fafafa;
-    }
-    .session-item.active {
-      border-color: #4f46e5;
-      background: #eef2ff;
     }
     .msg {
       padding: 10px 12px;
@@ -99,6 +89,10 @@
       border-radius: 6px;
       cursor: pointer;
     }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
     button.secondary {
       background: #fff;
       color: #4f46e5;
@@ -117,22 +111,35 @@
     .small {
       font-size: 12px;
     }
+    .loading {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+    .error {
+      background: #fee;
+      color: #c33;
+      padding: 8px;
+      border-radius: 6px;
+      margin: 8px 0;
+    }
   </style>
 </head>
 <body>
   <aside id="sidebar">
-    <h3>Sessions</h3>
+    <h3>Configuration</h3>
     <div class="row">
-      <input id="userId" type="text" value="1234567890123" />
+      <input id="sessionId" type="text" placeholder="Session ID" value="1" />
     </div>
-    <div id="sessions"></div>
+    <div class="row">
+      <input id="apiBase" type="text" placeholder="API Base URL" value="http://localhost:8000" />
+    </div>
     <hr />
-    <h4>Start New Session</h4>
+    <h4>Start New Chat</h4>
     <div class="row">
       <input id="conditionName" type="text" placeholder="Condition name" value="دیابت نوع دو" />
     </div>
     <div class="row">
-      <textarea id="patientJson" rows="8" placeholder="Patient JSON">{ 
+      <textarea id="patientJson" rows="8" placeholder="Patient JSON (condition_data)">{ 
   "glucose": [120, 140, 135],
   "hba1c": 7.2,
   "medications": ["Metformin 500mg BID"],
@@ -140,39 +147,54 @@
 }</textarea>
     </div>
     <div class="row">
-      <button id="startBtn">Start Session</button>
+      <button id="startBtn">Generate Initial Message</button>
     </div>
-    <p class="muted">Enter any JSON or text. It will be stored for the session context and passed to the LLM.</p>
+    <p class="muted">Enter condition name and patient data (JSON). This will generate the initial educational message.</p>
+    <hr />
+    <div class="row">
+      <button id="clearBtn" class="secondary">Clear Chat</button>
+    </div>
   </aside>
   <header>
     <strong>EHR Chatbot Demo</strong>
-    <span class="muted">API base: <code id="apiBaseLabel">http://127.0.0.1:8000</code></span>
+    <span class="muted">API: <code id="apiBaseLabel">http://localhost:8000</code></span>
   </header>
   <main>
     <section id="chat"></section>
     <section id="composer">
-      <input id="messageInput" type="text" placeholder="Type your message…" />
-      <button id="sendBtn">Send</button>
+      <input id="messageInput" type="text" placeholder="Type your message…" disabled />
+      <button id="sendBtn" disabled>Send</button>
     </section>
   </main>
   <footer>
-    Simple demo client. Open the API docs at <a href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer">Swagger UI</a>.
+    Simple demo client. Open the API docs at <a href="http://localhost:8000/docs" target="_blank" rel="noreferrer">Swagger UI</a>.
   </footer>
 
   <script>
-    const API_BASE = (localStorage.getItem('apiBase') || 'http://127.0.0.1:8000').replace(/\/+$/, '');
-    document.getElementById('apiBaseLabel').textContent = API_BASE;
+    let API_BASE = 'http://localhost:8000';
+    let currentSessionId = 1;
+    let conversationHistory = [];
+    let conditionData = null;
 
-    let currentSessionId = null;
-
-    const $sessions = document.getElementById('sessions');
     const $chat = document.getElementById('chat');
-    const $userId = document.getElementById('userId');
+    const $sessionId = document.getElementById('sessionId');
+    const $apiBase = document.getElementById('apiBase');
     const $conditionName = document.getElementById('conditionName');
     const $patientJson = document.getElementById('patientJson');
     const $messageInput = document.getElementById('messageInput');
     const $startBtn = document.getElementById('startBtn');
     const $sendBtn = document.getElementById('sendBtn');
+    const $clearBtn = document.getElementById('clearBtn');
+    const $apiBaseLabel = document.getElementById('apiBaseLabel');
+
+    function updateApiBase() {
+      API_BASE = $apiBase.value.trim() || 'http://localhost:8000';
+      $apiBaseLabel.textContent = API_BASE;
+    }
+
+    $apiBase.addEventListener('change', updateApiBase);
+    $apiBase.addEventListener('blur', updateApiBase);
+    updateApiBase();
 
     function el(tag, className, text) {
       const e = document.createElement(tag);
@@ -190,149 +212,166 @@
 
     function clearChat() {
       $chat.innerHTML = '';
+      conversationHistory = [];
     }
 
-    function renderSessions(sessions) {
-      $sessions.innerHTML = '';
-      sessions.forEach(s => {
-        const item = el('div', 'session-item' + (s.id === currentSessionId ? ' active' : ''));
-        item.innerHTML = `
-          <div><strong>#${s.id}</strong> ${s.title ? s.title : ''}</div>
-          <div class="small muted">${s.updated_at ? new Date(s.updated_at).toLocaleString() : ''}</div>
-        `;
-        item.addEventListener('click', async () => {
-          currentSessionId = s.id;
-          await loadMessages(currentSessionId);
-          await refreshSessions();
-        });
-        $sessions.appendChild(item);
-      });
-    }
-
-    async function refreshSessions() {
-      const uid = $userId.value.trim();
-      if (!uid) return;
-      const res = await fetch(`${API_BASE}/sessions?user_id=${encodeURIComponent(uid)}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      renderSessions(data);
-    }
-
-    async function loadMessages(sessionId) {
-      const res = await fetch(`${API_BASE}/sessions/${sessionId}/messages`);
-      if (!res.ok) {
-        alert('Failed to load messages');
-        return;
-      }
-      const messages = await res.json();
-      clearChat();
-      messages.forEach(m => renderMessage(m.role, m.content));
-    }
-
-    async function streamToChat(url, options = {}) {
-      const res = await fetch(url, options);
-      if (!res.ok || !res.body) {
-        const err = await res.text().catch(() => '');
-        throw new Error(err || res.statusText);
-      }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let assistantMsg = el('div', 'msg assistant', '');
-      let accumulated = '';
-      $chat.appendChild(assistantMsg);
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        accumulated += chunk;
-        assistantMsg.textContent = accumulated;
-        $chat.scrollTop = $chat.scrollHeight;
-      }
-    }
-
-    async function startSession() {
-      const uid = $userId.value.trim();
-      const cname = $conditionName.value.trim() || 'Condition';
-      if (!uid) {
-        alert('Please enter user id');
-        return;
-      }
-      let patient;
-      const jsonText = $patientJson.value.trim();
-      if (!jsonText) {
-        patient = {};
+    function setLoading(loading) {
+      if (loading) {
+        document.body.classList.add('loading');
+        $startBtn.disabled = true;
+        $sendBtn.disabled = true;
+        $messageInput.disabled = true;
       } else {
+        document.body.classList.remove('loading');
+        $startBtn.disabled = false;
+        $sendBtn.disabled = conversationHistory.length === 0;
+        $messageInput.disabled = conversationHistory.length === 0;
+      }
+    }
+
+    function showError(message) {
+      const errorDiv = el('div', 'error', `Error: ${message}`);
+      $chat.appendChild(errorDiv);
+      $chat.scrollTop = $chat.scrollHeight;
+    }
+
+    async function generateInitialMessage() {
+      const conditionName = $conditionName.value.trim();
+      if (!conditionName) {
+        alert('Please enter a condition name');
+        return;
+      }
+
+      let patientData = {};
+      const jsonText = $patientJson.value.trim();
+      if (jsonText) {
         try {
-          // Try to parse as JSON
-          patient = JSON.parse(jsonText);
+          patientData = JSON.parse(jsonText);
         } catch (e) {
-          // If parsing fails, wrap the raw text in a dict so backend accepts it
-          // The LLM will receive this in the prompt anyway
-          patient = { "raw_data": jsonText };
+          alert('Invalid JSON in patient data field. Using empty object.');
+          patientData = {};
         }
       }
-      const payload = {
-        user_id: Number(uid),
-        condition_name: cname,
-        patient_data: patient
-      };
-      // Create session without initial message (we will stream it next)
-      const res = await fetch(`${API_BASE}/sessions/start_simple`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        alert('Failed to start session: ' + (err.detail || res.statusText));
-        return;
-      }
-      const data = await res.json();
-      currentSessionId = data.session_id;
+
+      setLoading(true);
       clearChat();
-      // Stream educational content
+
       try {
-        await streamToChat(`${API_BASE}/sessions/${currentSessionId}/education/stream`);
-      } catch (e) {
-        alert('Failed to stream education: ' + e.message);
+        const requestBody = {
+          context: {
+            condition_name: conditionName,
+            condition_data: patientData
+          }
+        };
+
+        const response = await fetch(`${API_BASE}/generate-initial-message`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ detail: response.statusText }));
+          throw new Error(errorData.detail || `HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        
+        if (data.success && data.message) {
+          // Store condition data for future chat messages
+          conditionData = patientData;
+          currentSessionId = parseInt($sessionId.value) || 1;
+          
+          // Add initial message to conversation history
+          conversationHistory.push({
+            role: 'assistant',
+            content: data.message
+          });
+          
+          renderMessage('assistant', data.message);
+        } else {
+          throw new Error(data.error || 'Failed to generate initial message');
+        }
+      } catch (error) {
+        console.error('Error generating initial message:', error);
+        showError(error.message);
+      } finally {
+        setLoading(false);
       }
-      await refreshSessions();
     }
 
     async function sendMessage() {
-      if (!currentSessionId) {
-        alert('Start or select a session first');
-        return;
-      }
       const text = $messageInput.value.trim();
       if (!text) return;
+
+      // Add user message to UI and history
       renderMessage('user', text);
+      conversationHistory.push({
+        role: 'user',
+        content: text
+      });
+      
       $messageInput.value = '';
+      setLoading(true);
+
       try {
-        await streamToChat(`${API_BASE}/sessions/${currentSessionId}/messages/stream`, {
+        currentSessionId = parseInt($sessionId.value) || 1;
+
+        const requestBody = {
+          question: text,
+          session_id: currentSessionId,
+          conversation_history: conversationHistory.slice(0, -1), // Exclude the current question
+          condition_data: conditionData
+        };
+
+        const response = await fetch(`${API_BASE}/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text })
+          body: JSON.stringify(requestBody)
         });
-      } catch (e) {
-        alert('Failed to stream reply: ' + e.message);
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ detail: response.statusText }));
+          throw new Error(errorData.detail || `HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        
+        if (data.success && data.answer) {
+          // Add assistant response to conversation history
+          conversationHistory.push({
+            role: 'assistant',
+            content: data.answer
+          });
+          
+          renderMessage('assistant', data.answer);
+        } else {
+          throw new Error(data.error || 'Failed to get response');
+        }
+      } catch (error) {
+        console.error('Error sending message:', error);
+        showError(error.message);
+        // Remove the user message from history if request failed
+        conversationHistory.pop();
+      } finally {
+        setLoading(false);
       }
-      await refreshSessions();
     }
 
-    $startBtn.addEventListener('click', startSession);
+    $startBtn.addEventListener('click', generateInitialMessage);
     $sendBtn.addEventListener('click', sendMessage);
+    $clearBtn.addEventListener('click', () => {
+      clearChat();
+      conditionData = null;
+      setLoading(false);
+    });
+
     $messageInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === 'Enter' && !e.shiftKey && !$sendBtn.disabled) {
         e.preventDefault();
         sendMessage();
       }
     });
-
-    // Initial load
-    refreshSessions().catch(() => {});
   </script>
 </body>
 </html>
-
-
