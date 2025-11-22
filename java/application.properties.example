@@ -1,0 +1,16 @@
+# Python Chatbot Direct Integration Configuration
+# Path to Python executable (use 'python', 'python3', or full path)
+chatbot.python.executable=python
+
+# Path to chatbot_cli.py script (relative to project root or absolute path)
+chatbot.python.script-path=core/chatbot_cli.py
+
+# Timeout for Python script execution in seconds
+chatbot.python.timeout=120
+
+# Optional: Set working directory (defaults to script's parent directory)
+# chatbot.python.working-dir=/path/to/ehr_chatbot
+
+# Logging
+logging.level.com.ehr.chatbot=DEBUG
+
