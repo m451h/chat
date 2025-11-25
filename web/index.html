@@ -136,7 +136,7 @@
     <hr />
     <h4>Start New Chat</h4>
     <div class="row">
-      <input id="conditionName" type="text" placeholder="Condition name" value="دیابت نوع دو" />
+      <input id="treatmentPlanName" type="text" placeholder="Treatment plan name" value="دیابت نوع دو" />
     </div>
     <div class="row">
       <textarea id="patientJson" rows="8" placeholder="Patient JSON (condition_data)">{ 
@@ -149,7 +149,7 @@
     <div class="row">
       <button id="startBtn">Generate Initial Message</button>
     </div>
-    <p class="muted">Enter condition name and patient data (JSON). This will generate the initial educational message.</p>
+    <p class="muted">Enter treatment plan name and patient data (JSON). This will generate the initial educational message.</p>
     <hr />
     <div class="row">
       <button id="clearBtn" class="secondary">Clear Chat</button>
@@ -179,7 +179,7 @@
     const $chat = document.getElementById('chat');
     const $sessionId = document.getElementById('sessionId');
     const $apiBase = document.getElementById('apiBase');
-    const $conditionName = document.getElementById('conditionName');
+    const $treatmentPlanName = document.getElementById('treatmentPlanName');
     const $patientJson = document.getElementById('patientJson');
     const $messageInput = document.getElementById('messageInput');
     const $startBtn = document.getElementById('startBtn');
@@ -236,9 +236,9 @@
     }
 
     async function generateInitialMessage() {
-      const conditionName = $conditionName.value.trim();
-      if (!conditionName) {
-        alert('Please enter a condition name');
+      const treatmentPlanName = $treatmentPlanName.value.trim();
+      if (!treatmentPlanName) {
+        alert('Please enter a treatment plan name');
         return;
       }
 
@@ -259,7 +259,7 @@
       try {
         const requestBody = {
           context: {
-            condition_name: conditionName,
+            treatment_plan_name: treatmentPlanName,
             condition_data: patientData
           }
         };

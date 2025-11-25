@@ -81,8 +81,14 @@ async def startup_event():
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    """Health check endpoint with HTML response"""
-    return """
+    """Serve the frontend HTML page"""
+    web_file = Path(__file__).parent.parent / "web" / "index.html"
+    if web_file.exists():
+        with open(web_file, 'r', encoding='utf-8') as f:
+            return f.read()
+    else:
+        # Fallback to API info page if web file doesn't exist
+        return """
     <!DOCTYPE html>
     <html>
     <head>
@@ -125,7 +131,7 @@ async def generate_initial_message(request: GenerateInitialMessageRequest):
     Generate initial educational message based on context
     
     Args:
-        request: Contains context with condition_name and condition_data
+        request: Contains context with treatment_plan_name and condition_data
     
     Returns:
         Generated educational message
@@ -136,7 +142,7 @@ async def generate_initial_message(request: GenerateInitialMessageRequest):
         
         # Generate educational content using non-streaming version
         message = chatbot_instance.generate_educational_content(
-            condition_name=context.condition_name,
+            treatment_plan_name=context.treatment_plan_name,
             condition_data=context.condition_data,
             session_id=0  # Session will be managed by Java backend
         )

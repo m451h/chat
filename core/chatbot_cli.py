@@ -57,19 +57,19 @@ def main():
 
 def handle_generate_educational(chatbot: MedicalChatbot, input_data: dict) -> dict:
     """Handle generate_educational_content command"""
-    condition_name = input_data.get("condition_name")
+    treatment_plan_name = input_data.get("treatment_plan_name")
     condition_data = input_data.get("condition_data")
     session_id = input_data.get("session_id", 0)
     
-    if not condition_name:
+    if not treatment_plan_name:
         return {
             "success": False,
-            "error": "condition_name is required"
+            "error": "treatment_plan_name is required"
         }
     
     try:
         message = chatbot.generate_educational_content(
-            condition_name=condition_name,
+            treatment_plan_name=treatment_plan_name,
             condition_data=condition_data,
             session_id=session_id
         )

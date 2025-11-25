@@ -25,7 +25,7 @@ def test_generate_educational():
     print("\nTesting generate educational content...")
     input_data = {
         "command": "generate_educational",
-        "condition_name": "دیابت نوع 2",
+        "treatment_plan_name": "دیابت نوع 2",
         "condition_data": {
             "age": 45,
             "gender": "male"

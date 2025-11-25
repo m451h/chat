@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 class ContextData(BaseModel):
     """Context data structure for initial message generation"""
-    condition_name: str
+    treatment_plan_name: str
     condition_data: Optional[Dict[str, Any]] = None
 
 

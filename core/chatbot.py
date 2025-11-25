@@ -97,16 +97,16 @@ class MedicalChatbot:
     
     def generate_educational_content(
         self,
-        condition_name: str,
+        treatment_plan_name: str,
         condition_data_file: Optional[str] = None,
         session_id: int = 0,
         condition_data: Optional[Dict] = None,
     ) -> str:
         """
-        Generate initial educational content about a condition
+        Generate initial educational content about a treatment plan
         
         Args:
-            condition_name: Persian name of the condition
+            treatment_plan_name: Persian name of the treatment plan
             condition_data_file: Path to JSON file with user's condition data
             session_id: Chat session ID for memory management
         
@@ -122,7 +122,7 @@ class MedicalChatbot:
                     condition_data = self._load_condition_data(condition_data_file)
             
             # Generate educational prompt
-            prompt = get_educational_prompt(condition_name, condition_data)
+            prompt = get_educational_prompt(treatment_plan_name, condition_data)
             
             # Generate content using educational LLM with higher token limit
             messages = [HumanMessage(content=prompt)]
@@ -143,7 +143,7 @@ class MedicalChatbot:
     
     def generate_educational_content_stream(
         self,
-        condition_name: str,
+        treatment_plan_name: str,
         condition_data_file: Optional[str] = None,
         session_id: int = 0,
         condition_data: Optional[Dict] = None,
@@ -152,7 +152,7 @@ class MedicalChatbot:
         Stream educational content generation for better UX with long responses
         
         Args:
-            condition_name: Persian name of the condition
+            treatment_plan_name: Persian name of the treatment plan
             condition_data_file: Path to JSON file with user's condition data
             session_id: Chat session ID for memory management
         
@@ -168,7 +168,7 @@ class MedicalChatbot:
                     condition_data = self._load_condition_data(condition_data_file)
             
             # Generate educational prompt
-            prompt = get_educational_prompt(condition_name, condition_data)
+            prompt = get_educational_prompt(treatment_plan_name, condition_data)
             
             # Stream content using educational LLM with higher token limit
             messages = [HumanMessage(content=prompt)]
